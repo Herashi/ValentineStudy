@@ -1,0 +1,284 @@
+---
+title: "Secondary Analysis"
+output: html_document
+date: '2022-10-19'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(stringr)
+library(geepack)
+library(ggpubr)
+library(cowplot)
+library(car)
+`%notin%` = Negate(`%in%`)
+
+setwd("~/Valentine/Final Data")
+
+########### 
+# Table 1
+###########
+
+library(table1)
+```
+
+
+
+```{r include=FALSE}
+plot_multi_histogram <- function(df, feature, label_column) {
+  plt <- ggplot(df, aes(x=eval(parse(text=feature)), fill=eval(parse(text=label_column)))) +
+    geom_histogram(alpha=0.7, position="identity", aes(y = ..density..), color="black") +
+    geom_density(alpha=0.7) +
+    # geom_vline(aes(xintercept=mean(eval(parse(text=feature)))), color="black", linetype="dashed", size=1) +
+    labs(x=feature, y = "Density")
+  plt + guides(fill=guide_legend(title=label_column))
+}
+
+StudyParticipants <- read_csv("StudyParticipants 20221017.csv", 
+    col_types = cols(TimeEnrollment_to_Exit_days = col_double(),
+                     IsExit = col_factor(levels = c("0",  "1")),
+                     IsWithdrawn = col_factor(levels = c("0",  "1")),))
+# 
+# StudyParticipants <- read_csv("StudyParticipants.csv", 
+#                               col_types = cols(# CardiacRehabStartDate_ET = col_date(format = "%Y-%m-%d"), 
+#                                 # ConsentDate_ET = col_date(format = "%Y-%m-%d"), 
+#                                 # EnrollmentDate_ET = col_date(format = "%Y-%m-%d"), 
+#                                 # EnrollmentDate_ET_Add_6mo = col_date(format = "%Y-%m-%d"), 
+#                                 # WithdrawalDate_ET = col_date(format = "%Y-%m-%d"), 
+#                                 # TerminationDate_ET = col_date(format = "%Y-%m-%d"), 
+#                                 ExitDate_ET = col_date(format = "%m/%d/%y"), 
+#                                 IsExit = col_factor(levels = c("0",  "1")),
+#                                 # Time_CardiacRehabStart_to_Withdrawal_days = col_double(), 
+#                                 # Time_CardiacRehabStart_to_Termination_days = col_double(), 
+#                                 # Time_CardiacRehabStart_to_Exit_days = col_double(), 
+#                                 AgeWithdrawal_years = col_double(),
+#                                 AgeEnrollment_years = col_double(),
+#                                 AgeTermination_years = col_double(), 
+#                                 AgeExit_years = col_double()))
+
+StudyParticipants$Age_cat = ifelse(StudyParticipants$AgeEnrollment_years<65, "young", "senior")
+StudyParticipants$Age_cat_id = ifelse(StudyParticipants$AgeEnrollment_years<65, -1, 1)
+```
+
+
+
+
+```{r include=FALSE}
+pvalue <- function(x, ...) {
+    # Construct vectors of data y, and groups (strata) g
+    y <- unlist(x)
+    g <- factor(rep(1:length(x), times=sapply(x, length)))
+    if (is.numeric(y)) {
+        # For numeric variables, perform a standard 2-sample t-test
+        p <- t.test(y ~ g)$p.value
+    } else {
+        # For categorical variables, perform a chi-squared test of independence
+        p <- chisq.test(table(y, g))$p.value
+    }
+    # Format the p-value, using an HTML entity for the less-than sign.
+    # The initial empty string places the output on the line below the variable label.
+    c("", sub("<", "&lt;", format.pval(p, digits=3, eps=0.001)))
+}
+```
+
+
+
+### Average daily step count
+
+```{r include=FALSE}
+
+
+### at least 8 hours of daily watch wear time.
+
+
+library(readr)
+Valentine_Primary_Analysis_Data <-  read_csv("Functional Endpoints 20221017.csv", 
+    col_types = cols(Date_ET = col_date(format = "%Y-%m-%d"), 
+        WearTimeAgg_hours = col_double(), 
+        WearTime_hours = col_number(), DailyWearTime_hours = col_number(), 
+        ExerciseTimeAgg_min = col_double(), 
+        DailyExerciseTime_min = col_double(), 
+        StepsAgg = col_double(), DailySteps = col_double(), 
+        WalkDistance_m = col_double())) 
+
+
+Valentine_Primary_Analysis_Data <- Valentine_Primary_Analysis_Data %>%
+  arrange(ParticipantIdentifier, Date_ET)%>%
+  distinct(ParticipantIdentifier, Date_ET,.keep_all = TRUE)
+
+Valentine_Primary_Analysis_Data$WearTime_hours = if_else(is.na(Valentine_Primary_Analysis_Data$WearTimeAgg_hours),Valentine_Primary_Analysis_Data$WearTime_hours,Valentine_Primary_Analysis_Data$WearTimeAgg_hours)
+
+
+Valentine_Primary_Analysis_Data$StepsAgg = if_else(is.na(Valentine_Primary_Analysis_Data$StepsAgg),Valentine_Primary_Analysis_Data$DailySteps,Valentine_Primary_Analysis_Data$StepsAgg)
+
+load("Data_step_3month.RData")
+
+Primary_Analysis_Data_summary = Valentine_Primary_Analysis_Data %>% 
+  group_by(ParticipantIdentifier, Phase)%>%
+  summarise(days_record = sum(WearTime_hours>8,na.rm = TRUE),
+            weekly_average = mean(StepsAgg,na.rm = TRUE)) %>%
+  na_if("NaN")%>% left_join(StudyParticipants[,c("ParticipantIdentifier","Cohort","Device")])%>%
+  rbind(Data_step_3month)%>%
+  left_join(StudyParticipants[,c("ParticipantIdentifier","IsWithdrawn")])
+
+
+# write.csv(Primary_Analysis_Data_summary, file = "step_count.csv")
+
+# length(unique(Primary_Analysis_Data_summary$ParticipantIdentifier))
+
+Less_3_0 = Primary_Analysis_Data_summary %>% filter(Phase =="0-mo.") %>% filter(days_record < 3 )
+ID_0 = unique(Less_3_0$ParticipantIdentifier)
+
+Less_3_6 = Primary_Analysis_Data_summary %>% filter(Phase=="6-mo.") %>% filter(days_record < 3 )
+ID_6 = unique(Less_3_6$ParticipantIdentifier)
+
+Less_3_3 = Primary_Analysis_Data_summary %>% filter(Phase =="3-mo.") %>% filter(days_record < 3 )
+ID_3 = unique(Less_3_3$ParticipantIdentifier)
+
+
+Total_summary = Primary_Analysis_Data_summary %>%
+  select(-days_record)%>%
+  pivot_wider(names_from = Phase, values_from = weekly_average)
+
+Total_summary[Total_summary$ParticipantIdentifier %in% ID_0,]$`0-mo.` = NA
+Total_summary[Total_summary$ParticipantIdentifier %in% ID_6,]$`6-mo.` = NA
+Total_summary[Total_summary$ParticipantIdentifier %in% ID_3,]$`3-mo.` = NA
+
+
+
+# %>%filter(ParticipantIdentifier %notin% ID)
+
+Total_summary$weekly_average_dif = Total_summary$`6-mo.` - Total_summary$`0-mo.`
+
+Total_summary$weekly_average_dif3 = Total_summary$`3-mo.`- Total_summary$`0-mo.`
+
+
+Total_summary = left_join(Total_summary, StudyParticipants[,c("ParticipantIdentifier","CardiacRehabCenter","IsExit","Gender", "Age_cat","Age_cat_id", "Race", "Indication",  "ComorbidCAD_bool",                                 
+                                                    "ComorbidHF_bool", "ComorbidPCICABG_bool","ComorbidValve_bool")], by = "ParticipantIdentifier")
+
+Total_summary$Cohort = factor(Total_summary$Cohort, levels = c("Usual","Telehealth"))
+Total_summary$Cohort = relevel(Total_summary$Cohort, ref = "Usual")
+
+table1(~weekly_average_dif+weekly_average_dif3+ `0-mo.` + `3-mo.` + `6-mo.` | Cohort, data = Total_summary, overall=F, extra.col=list(`P-value`=pvalue))
+
+```
+
+
+```{r}
+
+# ## Case
+apply(Total_summary[Total_summary$Cohort == "Telehealth",c(5,6,7)], 2, mean, na.rm = T)
+apply(Total_summary[Total_summary$Cohort == "Telehealth",c(5,6,7)], 2, sd, na.rm = T)
+apply(!is.na(Total_summary[Total_summary$Cohort == "Telehealth",c(5,6,7)]), 2, sum)
+# ## Control
+ apply(Total_summary[Total_summary$Cohort == "Usual",c(5,6,7)], 2, mean, na.rm = T)
+ apply(Total_summary[Total_summary$Cohort == "Usual",c(5,6,7)], 2, sd, na.rm = T)
+ apply(!is.na(Total_summary[Total_summary$Cohort == "Usual",c(5,6,7)]), 2, sum)
+#
+
+################ Supplement
+
+
+# ## Case Apple
+ apply(Total_summary[Total_summary$Cohort == "Telehealth"& Total_summary$Device == "Apple Watch",c(5,6,7)], 2, mean, na.rm = T)
+ apply(Total_summary[Total_summary$Cohort == "Telehealth"& Total_summary$Device == "Apple Watch",c(5,6,7)], 2, sd, na.rm = T)
+ apply(!is.na(Total_summary[Total_summary$Cohort == "Telehealth"& Total_summary$Device == "Apple Watch",c(5,6,7)]), 2, sum)
+#
+#
+# ## Case Fitbit
+ apply(Total_summary[Total_summary$Cohort == "Telehealth"& Total_summary$Device == "Fitbit",c(5,6,7)], 2, mean, na.rm = T)
+ apply(Total_summary[Total_summary$Cohort == "Telehealth"& Total_summary$Device == "Fitbit",c(5,6,7)], 2, sd, na.rm = T)
+ apply(!is.na(Total_summary[Total_summary$Cohort == "Telehealth"& Total_summary$Device == "Fitbit",c(5,6,7)]), 2, sum)
+#
+
+#
+# ## Control Apple
+# #
+ apply(Total_summary[Total_summary$Cohort == "Usual"& Total_summary$Device == "Apple Watch",c(5,6,7)], 2, mean, na.rm = T)
+ apply(Total_summary[Total_summary$Cohort == "Usual"& Total_summary$Device == "Apple Watch",c(5,6,7)], 2, sd, na.rm = T)
+ apply(!is.na(Total_summary[Total_summary$Cohort == "Usual"& Total_summary$Device == "Apple Watch",c(5,6,7)]), 2, sum)
+
+#
+#
+# ## Control Fibit
+#
+ apply(Total_summary[Total_summary$Cohort == "Usual"& Total_summary$Device == "Fitbit",c(5,6,7)], 2, mean, na.rm = T)
+ apply(Total_summary[Total_summary$Cohort == "Usual"& Total_summary$Device == "Fitbit",c(5,6,7)], 2, sd, na.rm = T)
+ apply(!is.na(Total_summary[Total_summary$Cohort == "Usual"& Total_summary$Device == "Fitbit",c(5,6,7)]), 2, sum)
+
+# Primary_Analysis_Data_summary$Cohort = if_else(Primary_Analysis_Data_summary$Cohort == "Usual", "Control", "Intervention")
+```
+
+
+
+
+### Comparing the first week and the last week average daily step counts
+
+```{r echo=FALSE, warning=FALSE}
+#### In the paragraph
+
+plot_multi_histogram(Primary_Analysis_Data_summary, "weekly_average", "Phase")
+
+table1(~weekly_average_dif+weekly_average_dif3+ `0-mo.` + `3-mo.` + `6-mo.` | Cohort, data = Total_summary, overall=F, extra.col=list(`P-value`=pvalue))
+
+Stepcount_summary = Primary_Analysis_Data_summary %>%
+  group_by(Cohort, Phase)%>%
+  summarise(step_count_mean = mean(weekly_average,na.rm = T),
+            step_count_sd = sd(weekly_average,na.rm = T))
+
+p_step_1 = ggplot(Primary_Analysis_Data_summary[Primary_Analysis_Data_summary$Phase!="3-mo.",], 
+                aes(x = Phase, y = weekly_average, fill = Cohort))+
+  geom_boxplot()+
+  theme_bw()+
+  facet_wrap(vars(Device))+
+  ylab("Weekly Average Step Counts (steps)")
+
+p_step_1
+
+p_step_2 = ggplot(Primary_Analysis_Data_summary[Primary_Analysis_Data_summary$Phase!="6-mo.",], 
+                aes(x = Phase, y = weekly_average, fill = Cohort))+
+  geom_boxplot()+
+  theme_bw()+
+  facet_wrap(vars(Device))+
+  ylab("Weekly Average Step Counts (steps)")
+
+p_step_2
+
+```
+
+### Linear model testing the primiary hypothesis
+
+```{r echo=FALSE}
+cat("---------------------------------","\n")
+
+fit = lm(weekly_average_dif  ~ Cohort * Device, data =Total_summary )
+summary(fit)
+
+cat("---------------------------------","\n")
+
+cat("In this model, there are in total",dim(fit[["model"]])[1], "observations used", "\n")
+
+cat("---------------------------------","\n")
+
+
+
+linearHypothesis(fit,c("CohortTelehealth = 0", "CohortTelehealth + CohortTelehealth:DeviceFitbit = 0")) 
+```
+
+```{r echo=FALSE}
+fit = lm(weekly_average_dif3  ~ Cohort * Device, data =Total_summary )
+summary(fit)
+
+cat("---------------------------------","\n")
+
+cat("In this model, there are in total",dim(fit[["model"]])[1], "observations used", "\n")
+
+cat("---------------------------------","\n")
+
+
+
+linearHypothesis(fit,c("CohortTelehealth = 0", "CohortTelehealth + CohortTelehealth:DeviceFitbit = 0")) 
+```
+
